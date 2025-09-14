@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  plan      String    @default("starter")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  users     User[]
+  projects  Project[]
+}
+
+model User {
+  id             String       @id @default(uuid())
+  email          String       @unique
+  password       String
+  name           String
+  role           String       @default("MEMBER")
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+model Project {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  domain         String?
+  oneLiner       String?
+  competitors    Json         @default("[]")
+  settings       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  querySets      QuerySet[]
+  runSessions    RunSession[]
+  metrics        Metric[]
+  surfaceStatus  SurfaceStatus[]
+  playbooks      Playbook[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model QuerySet {
+  id        String      @id @default(uuid())
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  type      QueryType
+  queries   Json
+  version   Int         @default(1)
+  active    Boolean     @default(true)
+  createdAt DateTime    @default(now())
+
+  runSessions RunSession[]
+}
+
+enum QueryType {
+  sdk
+  enterprise
+  custom
+}
+
+model AiModel {
+  id         String       @id @default(uuid())
+  name       String
+  provider   String
+  modelId    String
+  apiConfig  Json?
+  rateLimits Json?
+  active     Boolean      @default(true)
+
+  runResults RunResult[]
+}
+
+model RunSession {
+  id          String      @id @default(uuid())
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  querySetId  String?
+  querySet    QuerySet?   @relation(fields: [querySetId], references: [id])
+  status      String      @default("pending")
+  startedAt   DateTime?
+  completedAt DateTime?
+  metadata    Json        @default("{}")
+
+  runResults  RunResult[]
+}
+
+model RunResult {
+  id                String      @id @default(uuid())
+  sessionId         String
+  session           RunSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  queryId           String
+  modelId           String
+  model             AiModel     @relation(fields: [modelId], references: [id])
+  queryText         String
+  responseText      String?
+  responseMetadata  Json?
+  citations         Json        @default("[]")
+  extractedSnippets Json        @default("[]")
+  mentions          Json        @default("[]")
+  executionTimeMs   Int?
+  createdAt         DateTime    @default(now())
+
+  executionResults  ExecutionResult[]
+
+  @@index([sessionId])
+}
+
+model ExecutionResult {
+  id                String      @id @default(uuid())
+  runResultId       String
+  runResult         RunResult   @relation(fields: [runResultId], references: [id], onDelete: Cascade)
+  snippetType       String?
+  language          String?
+  code              String
+  executionStatus   String?
+  exitCode          Int?
+  stdout            String?
+  stderr            String?
+  validationResults Json?
+  executedAt        DateTime    @default(now())
+}
+
+model Metric {
+  id          String      @id @default(uuid())
+  time        DateTime
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  metricType  String
+  dimensions  Json        @default("{}")
+  value       Float
+  metadata    Json        @default("{}")
+
+  @@index([projectId, time])
+  @@index([metricType, time])
+}
+
+model SurfaceStatus {
+  id               String      @id @default(uuid())
+  projectId        String
+  project          Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  surfaceType      String
+  url              String?
+  status           String?
+  validationResults Json?
+  lastCheckedAt    DateTime?
+  contentHash      String?
+  createdAt        DateTime    @default(now())
+
+  @@index([projectId, surfaceType])
+}
+
+model Playbook {
+  id          String      @id @default(uuid())
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type        String
+  priority    Int         @default(0)
+  title       String
+  description String?
+  actions     Json
+  status      String      @default("pending")
+  createdAt   DateTime    @default(now())
+}
