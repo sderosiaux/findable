@@ -41,7 +41,7 @@ interface Playbook {
   author: string;
 }
 
-interface PlaybooksManagerProps {
+interface PlaybookManagerProps {
   playbooks: Playbook[];
   onCreatePlaybook?: (playbook: Omit<Playbook, 'id' | 'createdAt' | 'runCount'>) => void;
   onUpdatePlaybook?: (id: string, playbook: Partial<Playbook>) => void;
@@ -402,7 +402,7 @@ function PlaybookCard({ playbook, onEdit, onDelete, onRun, onDuplicate }: {
   );
 }
 
-export function PlaybooksManager({
+export function PlaybookManager({
   playbooks,
   onCreatePlaybook,
   onUpdatePlaybook,
@@ -410,7 +410,7 @@ export function PlaybooksManager({
   onRunPlaybook,
   onDuplicatePlaybook,
   className
-}: PlaybooksManagerProps) {
+}: PlaybookManagerProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingPlaybook, setEditingPlaybook] = useState<Playbook | null>(null);
   const [filterTag, setFilterTag] = useState<string>('all');

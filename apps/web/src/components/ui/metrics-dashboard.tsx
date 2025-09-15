@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { TrendingUp, TrendingDown, Minus, Target, Zap, Search, Award } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface MetricData {
+interface MetricValue {
   id: string;
   name: string;
   value: number;
@@ -20,7 +20,7 @@ interface MetricData {
 }
 
 interface MetricsDashboardProps {
-  metrics: MetricData[];
+  metrics: MetricValue[];
   timeRange: '1h' | '24h' | '7d' | '30d';
   onTimeRangeChange: (range: '1h' | '24h' | '7d' | '30d') => void;
   onRefresh?: () => void;
@@ -46,7 +46,7 @@ const trendColors = {
   stable: 'text-gray-500',
 };
 
-function MetricCard({ metric }: { metric: MetricData }) {
+function MetricCard({ metric }: { metric: MetricValue }) {
   const Icon = metricIcons[metric.id as keyof typeof metricIcons] || Target;
   const TrendIcon = trendIcons[metric.trend];
   const trendColor = trendColors[metric.trend];
@@ -130,7 +130,7 @@ function MetricCard({ metric }: { metric: MetricData }) {
   );
 }
 
-function OverviewCard({ metrics }: { metrics: MetricData[] }) {
+function OverviewCard({ metrics }: { metrics: MetricValue[] }) {
   const averageScore = metrics.reduce((sum, m) => sum + m.value, 0) / metrics.length;
   const positiveMetrics = metrics.filter(m => m.trend === 'up').length;
   const totalMetrics = metrics.length;

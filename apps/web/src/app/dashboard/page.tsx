@@ -2,14 +2,13 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { api } from '@/lib/api';
 import {
-  BarChart3,
   Bot,
   TrendingUp,
   Activity,
   AlertCircle,
   CheckCircle,
-  Clock,
   Target,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,29 +18,33 @@ import { MetricCard } from '@/components/ui/metric-card';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 
 export default function DashboardPage() {
-  const [selectedProject, setSelectedProject] = useState<string>('');
-  const [timeRange, setTimeRange] = useState('7d');
+  const [selectedProject, _setSelectedProject] = useState<string>('');
+  const [timeRange, _setTimeRange] = useState('7d');
 
   // Fetch projects
   const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => {
-      const res = await fetch('/api/projects');
-      if (!res.ok) throw new Error('Failed to fetch projects');
-      return res.json();
+      const response = await api.getProjects();
+      if (response.error) throw new Error(response.error.message);
+      return response.data;
     },
   });
 
+  // Set default project if projects are loaded and no project is selected
+  const defaultProject = projects?.projects?.[0]?.id;
+  const activeProjectId = selectedProject || defaultProject;
+
   // Fetch metrics for selected project
-  const { data: metrics, isLoading: metricsLoading } = useQuery({
-    queryKey: ['metrics', selectedProject, timeRange],
+  const { data: metrics, isLoading: _metricsLoading } = useQuery({
+    queryKey: ['metrics', activeProjectId, timeRange],
     queryFn: async () => {
-      if (!selectedProject) return null;
-      const res = await fetch(`/api/metrics/${selectedProject}?range=${timeRange}`);
-      if (!res.ok) throw new Error('Failed to fetch metrics');
-      return res.json();
+      if (!activeProjectId) return null;
+      const response = await api.getMetrics(activeProjectId);
+      if (response.error) throw new Error(response.error.message);
+      return response.data;
     },
-    enabled: !!selectedProject,
+    enabled: !!activeProjectId,
   });
 
   // Mock data for demonstration
@@ -134,7 +137,9 @@ export default function DashboardPage() {
                 <CardDescription>Your AI visibility over time</CardDescription>
               </CardHeader>
               <CardContent>
-                <FindabilityChart data={[]} />
+                <div className="h-64 flex items-center justify-center text-muted-foreground">
+                  Chart coming soon
+                </div>
               </CardContent>
             </Card>
 
@@ -168,7 +173,9 @@ export default function DashboardPage() {
               <CardDescription>Latest AI responses and analysis</CardDescription>
             </CardHeader>
             <CardContent>
-              <QueryResults />
+              <div className="text-center text-muted-foreground py-8">
+                No recent queries found
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -181,7 +188,9 @@ export default function DashboardPage() {
               <CardDescription>Track how your queries perform across models</CardDescription>
             </CardHeader>
             <CardContent>
-              <QueryResults detailed />
+              <div className="text-center text-muted-foreground py-8">
+                Query results will appear here
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -194,7 +203,9 @@ export default function DashboardPage() {
               <CardDescription>How you rank against competitors</CardDescription>
             </CardHeader>
             <CardContent>
-              <CompetitorMatrix />
+              <div className="text-center text-muted-foreground py-8">
+                Competitive analysis coming soon
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

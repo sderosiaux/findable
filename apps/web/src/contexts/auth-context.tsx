@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiClient } from '@findable/shared/api/client';
+import { api } from '@/lib/api';
 import type { User, LoginRequest, SignupRequest } from '@findable/shared/schemas';
 
 interface AuthContextType {
@@ -39,8 +39,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const refreshAuth = async () => {
     try {
       setIsLoading(true);
-      const response = await apiClient.get('/auth/me');
-      if (response.success) {
+      const response = await api.me();
+      if (response.data) {
         setUser(response.data.user);
       } else {
         setUser(null);
@@ -58,9 +58,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const login = async (credentials: LoginRequest) => {
     try {
       setIsLoading(true);
-      const response = await apiClient.post('/auth/login', credentials);
+      const response = await api.login(credentials);
 
-      if (response.success) {
+      if (response.data) {
         const { user: userData, tokens } = response.data;
 
         localStorage.setItem('auth_token', tokens.accessToken);
@@ -68,7 +68,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         router.push('/dashboard');
       } else {
-        throw new Error(response.error || 'Login failed');
+        throw new Error(response.error?.message || 'Login failed');
       }
     } catch (error) {
       console.error('Login failed:', error);
@@ -81,9 +81,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signup = async (userData: SignupRequest) => {
     try {
       setIsLoading(true);
-      const response = await apiClient.post('/auth/signup', userData);
+      const response = await api.signup(userData);
 
-      if (response.success) {
+      if (response.data) {
         const { user: newUser, tokens } = response.data;
 
         localStorage.setItem('auth_token', tokens.accessToken);
@@ -91,7 +91,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         router.push('/dashboard');
       } else {
-        throw new Error(response.error || 'Signup failed');
+        throw new Error(response.error?.message || 'Signup failed');
       }
     } catch (error) {
       console.error('Signup failed:', error);
@@ -106,7 +106,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setIsLoading(true);
 
       try {
-        await apiClient.post('/auth/logout');
+        await api.logout();
       } catch (error) {
         console.warn('Logout API call failed:', error);
       }
