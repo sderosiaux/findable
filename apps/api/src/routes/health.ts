@@ -18,7 +18,7 @@ const healthRoutes: FastifyPluginAsync = async (fastify) => {
         },
       },
     },
-    async (request, reply) => {
+    async (_request, _reply) => {
       return {
         status: 'healthy',
         timestamp: new Date().toISOString(),

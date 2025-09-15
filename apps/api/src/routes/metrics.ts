@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { hasPermission, Permission } from '@findable/auth';
 import { MetricsCollector } from '../services/metrics-collector';
 
-const getMetricsSchema = z.object({
+const _getMetricsSchema = z.object({
   projectId: z.string().uuid(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
@@ -82,7 +82,7 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
-      const { startDate, endDate, metricType, granularity = 'day' } = request.query as any;
+      const { startDate, endDate, metricType, granularity: _granularity = 'day' } = request.query as any;
       const { organizationId, role } = request.user!;
 
       // Check permission

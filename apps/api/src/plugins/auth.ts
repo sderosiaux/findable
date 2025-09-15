@@ -1,10 +1,10 @@
 import fp from 'fastify-plugin';
-import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { authenticate as authMiddleware, type JWTPayload } from '@findable/auth';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticate: (request: any, reply: FastifyReply) => Promise<void>;
   }
   interface FastifyRequest {
     user?: JWTPayload;

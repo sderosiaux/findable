@@ -16,10 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { MetricCard } from '@/components/ui/metric-card';
-import { FindabilityChart } from '@/components/charts/findability-chart';
-import { CompetitorMatrix } from '@/components/charts/competitor-matrix';
-import { QueryResults } from '@/components/data/query-results';
-import { formatPercentage, formatNumber } from '@findable/shared';
+import { DashboardLayout } from '@/components/layout/dashboard-layout';
 
 export default function DashboardPage() {
   const [selectedProject, setSelectedProject] = useState<string>('');
@@ -64,7 +61,8 @@ export default function DashboardPage() {
   const currentMetrics = metrics || mockMetrics;
 
   return (
-    <div className="flex-1 space-y-4 p-8 pt-6">
+    <DashboardLayout>
+      <div className="flex-1 space-y-4 p-8 pt-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -285,6 +283,7 @@ export default function DashboardPage() {
           </Card>
         </TabsContent>
       </Tabs>
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
