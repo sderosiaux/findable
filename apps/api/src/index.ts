@@ -14,6 +14,7 @@ import { organizationRoutes } from './routes/organizations';
 import { projectRoutes } from './routes/projects';
 import { queryRoutes } from './routes/queries';
 import { metricsRoutes } from './routes/metrics';
+import { MetricsCollector } from './services/metrics-collector';
 
 const server = Fastify({
   logger: {
@@ -100,6 +101,13 @@ async function main() {
 
     server.log.info(`Server listening on http://${host}:${port}`);
     server.log.info(`API Documentation: http://${host}:${port}/documentation`);
+
+    // Start automatic metrics processing
+    const metricsCollector = new MetricsCollector((server as any).prisma);
+    const metricsInterval = metricsCollector.startAutomaticProcessing(5); // Every 5 minutes
+
+    // Store the interval for cleanup
+    (server as any).metricsInterval = metricsInterval;
   } catch (err) {
     server.log.error(err);
     process.exit(1);
@@ -109,12 +117,24 @@ async function main() {
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
   server.log.info('SIGINT signal received: closing HTTP server');
+
+  // Clean up metrics processing
+  if ((server as any).metricsInterval) {
+    clearInterval((server as any).metricsInterval);
+  }
+
   await server.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
   server.log.info('SIGTERM signal received: closing HTTP server');
+
+  // Clean up metrics processing
+  if ((server as any).metricsInterval) {
+    clearInterval((server as any).metricsInterval);
+  }
+
   await server.close();
   process.exit(0);
 });

@@ -2,6 +2,7 @@ export * from './constants';
 export * from './types';
 export * from './schemas';
 export * from './utilities';
+export * from './services/metrics-calculator';
 
 // API exports - avoiding conflicts with existing types
 export {

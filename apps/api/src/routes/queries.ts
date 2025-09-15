@@ -17,67 +17,47 @@ const createQuerySchema = z.object({
   tags: z.array(z.string()).max(10).optional(),
 });
 
-// Simulate query execution (replace with actual runner service)
-async function simulateQueryExecution(
+// Queue session for processing by runner service
+async function queueSessionForProcessing(
   fastify: any,
   sessionId: string,
-  config: {
-    queries: string[];
-    models: string[];
-    surfaces: string[];
-    projectId: string;
-  }
+  priority: string = 'normal'
 ) {
-  const { queries, models, surfaces, projectId } = config;
+  try {
+    const RUNNER_SERVICE_URL = process.env.RUNNER_SERVICE_URL || 'http://localhost:8001';
 
-  // Get available models from database
-  const availableModels = await fastify.prisma.model.findMany({
-    where: {
-      name: { in: models },
-      isActive: true,
-    },
-  });
+    // Send request to Python runner service
+    const response = await fetch(`${RUNNER_SERVICE_URL}/sessions/queue`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        priority,
+      }),
+    });
 
-  // Create query records
-  const queryRecords = await Promise.all(
-    queries.map((queryText, index) =>
-      fastify.prisma.query.create({
-        data: {
-          projectId,
-          text: queryText,
-          category: 'general',
-        },
-      })
-    )
-  );
-
-  // Simulate execution for each query-model-surface combination
-  for (const query of queryRecords) {
-    for (const model of availableModels) {
-      for (const surface of surfaces) {
-        // Simulate processing delay
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Create mock result
-        const mockMentions = Math.random() > 0.7 ? [`mock-mention-${Math.random().toString(36).substr(2, 9)}`] : [];
-        const mockCitations = Math.random() > 0.5 ? [`https://example.com/source-${Math.random().toString(36).substr(2, 9)}`] : [];
-
-        await fastify.prisma.runResult.create({
-          data: {
-            sessionId,
-            queryId: query.id,
-            modelId: model.id,
-            queryText: query.text,
-            responseText: `Mock response for "${query.text}" from ${model.name} on ${surface}`,
-            citations: mockCitations,
-            extractedSnippets: mockMentions.length > 0 ? [`Snippet mentioning relevant content for ${query.text}`] : [],
-            mentions: mockMentions,
-            executionTimeMs: Math.floor(Math.random() * 3000) + 500,
-            surface,
-          },
-        });
-      }
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Runner service error: ${error}`);
     }
+
+    const result = await response.json();
+    fastify.log.info(`Session ${sessionId} queued for processing:`, result);
+    return true;
+  } catch (error) {
+    fastify.log.error(`Failed to queue session ${sessionId}:`, error);
+    // Fall back to updating session status as failed
+    await fastify.prisma.runSession.update({
+      where: { id: sessionId },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        errorMessage: error instanceof Error ? error.message : 'Failed to queue session',
+      },
+    });
+    throw error;
   }
 }
 
@@ -159,22 +139,11 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
             },
           });
 
-          // Simulate query execution (replace with actual runner service call)
-          await simulateQueryExecution(fastify, session.id, {
-            queries,
-            models,
-            surfaces: surfaces || ['web'],
-            projectId,
-          });
+          // Queue session for processing by runner service
+          await queueSessionForProcessing(fastify, session.id, priority);
 
-          // Update session status
-          await fastify.prisma.runSession.update({
-            where: { id: session.id },
-            data: {
-              status: 'COMPLETED',
-              completedAt: new Date(),
-            },
-          });
+          // Session status will be updated by the runner service
+          // No need to update to COMPLETED here since it's handled asynchronously
         } catch (error) {
           fastify.log.error('Query execution failed:', error);
           await fastify.prisma.runSession.update({

@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { hasPermission, Permission } from '@findable/auth';
+import { MetricsCollector } from '../services/metrics-collector';
 
 const getMetricsSchema = z.object({
   projectId: z.string().uuid(),
@@ -527,6 +528,180 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
         avgPickRate: Number(avgPickRate.toFixed(3)),
         projectBreakdown,
       };
+    }
+  );
+
+  // Real-time metrics endpoint
+  fastify.get(
+    '/:projectId/realtime',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            projectId: { type: 'string' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            hours: { type: 'number', minimum: 1, maximum: 168, default: 24 },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              metrics: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    metricType: { type: 'string' },
+                    value: { type: 'number' },
+                    metadata: { type: 'object' },
+                  },
+                },
+              },
+              competitorMetrics: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    mentions: { type: 'number' },
+                    recommendations: { type: 'number' },
+                    pickRate: { type: 'number' },
+                    mentionRate: { type: 'number' },
+                  },
+                },
+              },
+              timeRange: {
+                type: 'object',
+                properties: {
+                  start: { type: 'string' },
+                  end: { type: 'string' },
+                  hours: { type: 'number' },
+                },
+              },
+              totalResults: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const { hours = 24 } = request.query as { hours?: number };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.REPORT_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view real-time metrics',
+        });
+      }
+
+      // Verify project ownership
+      const project = await fastify.prisma.project.findFirst({
+        where: {
+          id: projectId,
+          organizationId,
+          isActive: true,
+        },
+      });
+
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      try {
+        const metricsCollector = new MetricsCollector(fastify.prisma);
+        const realtimeMetrics = await metricsCollector.calculateRealtimeMetrics(projectId, hours);
+
+        return realtimeMetrics;
+      } catch (error) {
+        fastify.log.error('Failed to calculate real-time metrics:', error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to calculate real-time metrics',
+        });
+      }
+    }
+  );
+
+  // Process session metrics endpoint
+  fastify.post(
+    '/sessions/:sessionId/process',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              message: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { sessionId } = request.params as { sessionId: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_RUN)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to process metrics',
+        });
+      }
+
+      // Verify session ownership
+      const session = await fastify.prisma.runSession.findFirst({
+        where: {
+          id: sessionId,
+          project: {
+            organizationId,
+          },
+        },
+      });
+
+      if (!session) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Session not found',
+        });
+      }
+
+      try {
+        const metricsCollector = new MetricsCollector(fastify.prisma);
+        await metricsCollector.processCompletedSession(sessionId);
+
+        return {
+          success: true,
+          message: 'Metrics processed successfully',
+        };
+      } catch (error) {
+        fastify.log.error('Failed to process session metrics:', error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to process session metrics',
+        });
+      }
     }
   );
 };
