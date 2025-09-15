@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { LoadingStates } from '@/components/ui/loading';
 import { useParams } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 import { QueryBuilder } from '@/components/ui/query-builder';
@@ -97,15 +98,7 @@ export default function ProjectPage() {
     return (
       <DashboardLayout>
         <div className="p-8">
-          <div className="animate-pulse space-y-6">
-            <div className="h-8 bg-gray-200 rounded w-1/3" />
-            <div className="h-4 bg-gray-200 rounded w-2/3" />
-            <div className="grid grid-cols-4 gap-4">
-              {[...Array(4)].map((_, i) => (
-                <div key={i} className="h-32 bg-gray-200 rounded" />
-              ))}
-            </div>
-          </div>
+          <LoadingStates.ProjectDetail />
         </div>
       </DashboardLayout>
     );

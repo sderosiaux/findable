@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { LoadingStates } from '@/components/ui/loading';
 import { DashboardLayout } from '@/components/layout/dashboard-layout';
 import { ProjectForm } from '@/components/ui/project-form';
 import { Button } from '@/components/ui/button';
@@ -77,22 +78,7 @@ export default function ProjectsPage() {
 
         {/* Projects Grid */}
         {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(6)].map((_, i) => (
-              <Card key={i} className="animate-pulse">
-                <CardHeader>
-                  <div className="h-6 bg-gray-200 rounded w-3/4 mb-2" />
-                  <div className="h-4 bg-gray-200 rounded w-1/2" />
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="h-4 bg-gray-200 rounded w-full" />
-                    <div className="h-4 bg-gray-200 rounded w-2/3" />
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <LoadingStates.Projects />
         ) : projects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map((project: any) => (
