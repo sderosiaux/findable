@@ -1,11 +1,23 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { hasPermission, Permission } from '@findable/auth';
 
 const createProjectSchema = z.object({
-  name: z.string().min(2),
+  name: z.string().min(2).max(100),
   domain: z.string().url().optional(),
-  oneLiner: z.string().optional(),
-  competitors: z.array(z.string()).optional(),
+  oneLiner: z.string().max(200).optional(),
+  competitors: z.array(z.string().url()).max(10).optional(),
+  keywords: z.array(z.string()).max(20).optional(),
+});
+
+const updateProjectSchema = z.object({
+  name: z.string().min(2).max(100).optional(),
+  domain: z.string().url().optional(),
+  oneLiner: z.string().max(200).optional(),
+  competitors: z.array(z.string().url()).max(10).optional(),
+  keywords: z.array(z.string()).max(20).optional(),
+  settings: z.object({}).optional(),
+  isActive: z.boolean().optional(),
 });
 
 const projectRoutes: FastifyPluginAsync = async (fastify) => {
@@ -34,9 +46,34 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.PROJECT_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view projects',
+        });
+      }
+
       const projects = await fastify.prisma.project.findMany({
         where: {
-          organizationId: request.user!.organizationId,
+          organizationId,
+          isActive: true,
+        },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          domain: true,
+          oneLiner: true,
+          createdAt: true,
+          _count: {
+            select: {
+              queries: true,
+              runSessions: true,
+            },
+          },
         },
         orderBy: {
           createdAt: 'desc',
@@ -70,22 +107,34 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const { name, domain, oneLiner, competitors } = request.body as z.infer<
+      const { organizationId, role } = request.user!;
+      const { name, domain, oneLiner, competitors, keywords } = request.body as z.infer<
         typeof createProjectSchema
       >;
 
-      const slug = name.toLowerCase().replace(/\s+/g, '-');
+      // Check permission
+      if (!hasPermission(role, Permission.PROJECT_CREATE)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to create projects',
+        });
+      }
+
+      const slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
       // Check if project with same slug exists
       const existingProject = await fastify.prisma.project.findFirst({
         where: {
-          organizationId: request.user!.organizationId,
+          organizationId,
           slug,
         },
       });
 
       if (existingProject) {
-        return reply.code(400).send({ error: 'Project with this name already exists' });
+        return reply.status(409).send({
+          error: 'Conflict',
+          message: 'Project with this name already exists',
+        });
       }
 
       const project = await fastify.prisma.project.create({
@@ -95,11 +144,14 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
           domain,
           oneLiner,
           competitors: competitors || [],
-          organizationId: request.user!.organizationId,
+          keywords: keywords || [],
+          organizationId,
+          settings: {},
+          isActive: true,
         },
       });
 
-      return reply.code(201).send(project);
+      return reply.status(201).send(project);
     }
   );
 
@@ -138,16 +190,36 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.PROJECT_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view projects',
+        });
+      }
 
       const project = await fastify.prisma.project.findFirst({
         where: {
           id,
-          organizationId: request.user!.organizationId,
+          organizationId,
+        },
+        include: {
+          _count: {
+            select: {
+              queries: true,
+              runSessions: true,
+            },
+          },
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
       }
 
       return project;
@@ -166,34 +238,39 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
             id: { type: 'string' },
           },
         },
-        body: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            domain: { type: 'string' },
-            oneLiner: { type: 'string' },
-            competitors: {
-              type: 'array',
-              items: { type: 'string' },
-            },
-            settings: { type: 'object' },
-          },
-        },
+        body: updateProjectSchema,
       },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const updates = request.body as any;
+      const { organizationId, role } = request.user!;
+      const updates = request.body as z.infer<typeof updateProjectSchema>;
+
+      // Check permission
+      if (!hasPermission(role, Permission.PROJECT_EDIT)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to edit projects',
+        });
+      }
 
       const project = await fastify.prisma.project.findFirst({
         where: {
           id,
-          organizationId: request.user!.organizationId,
+          organizationId,
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      // If name is being updated, generate new slug
+      if (updates.name) {
+        (updates as any).slug = updates.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
       }
 
       const updatedProject = await fastify.prisma.project.update({
@@ -221,23 +298,37 @@ const projectRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.PROJECT_DELETE)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to delete projects',
+        });
+      }
 
       const project = await fastify.prisma.project.findFirst({
         where: {
           id,
-          organizationId: request.user!.organizationId,
+          organizationId,
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
       }
 
-      await fastify.prisma.project.delete({
+      // Soft delete by setting isActive to false
+      await fastify.prisma.project.update({
         where: { id },
+        data: { isActive: false },
       });
 
-      return reply.code(204).send();
+      return reply.status(204).send();
     }
   );
 };

@@ -1,11 +1,20 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { hasPermission, Permission } from '@findable/auth';
 
 const getMetricsSchema = z.object({
-  projectId: z.string(),
+  projectId: z.string().uuid(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   metricType: z.enum(['presence', 'pick_rate', 'snippet_health', 'citations']).optional(),
+  granularity: z.enum(['hour', 'day', 'week', 'month']).default('day'),
+});
+
+const createMetricSchema = z.object({
+  projectId: z.string().uuid(),
+  metricType: z.enum(['presence', 'pick_rate', 'snippet_health', 'citations']),
+  value: z.number().min(0).max(1),
+  metadata: z.object({}).optional(),
 });
 
 const metricsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -72,18 +81,31 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
-      const { startDate, endDate, metricType } = request.query as any;
+      const { startDate, endDate, metricType, granularity = 'day' } = request.query as any;
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.REPORT_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view metrics',
+        });
+      }
 
       // Verify project ownership
       const project = await fastify.prisma.project.findFirst({
         where: {
           id: projectId,
-          organizationId: request.user!.organizationId,
+          organizationId,
+          isActive: true,
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
       }
 
       // Build date filter
@@ -108,49 +130,90 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       // Calculate summary statistics
-      const totalRuns = await fastify.prisma.runResult.count({
+      const [totalRuns, totalQueries, completedSessions] = await Promise.all([
+        fastify.prisma.runResult.count({
+          where: {
+            session: {
+              projectId,
+            },
+          },
+        }),
+        fastify.prisma.query.count({
+          where: { projectId },
+        }),
+        fastify.prisma.runSession.count({
+          where: {
+            projectId,
+            status: 'COMPLETED',
+          },
+        }),
+      ]);
+
+      // Calculate metrics by type
+      const metricsByType = metrics.reduce((acc, metric) => {
+        if (!acc[metric.metricType]) {
+          acc[metric.metricType] = [];
+        }
+        acc[metric.metricType].push(metric.value);
+        return acc;
+      }, {} as Record<string, number[]>);
+
+      const calculateAverage = (values: number[]) =>
+        values.length > 0 ? values.reduce((sum, v) => sum + v, 0) / values.length : 0;
+
+      const presenceScore = calculateAverage(metricsByType.presence || []);
+      const pickRate = calculateAverage(metricsByType.pick_rate || []);
+      const snippetPassRate = calculateAverage(metricsByType.snippet_health || []);
+      const citationCoverage = calculateAverage(metricsByType.citations || []);
+
+      // Get competitor mentions from run results
+      const competitorMentions = await fastify.prisma.runResult.findMany({
         where: {
           session: {
             projectId,
           },
+          mentions: {
+            not: {
+              equals: [],
+            },
+          },
+        },
+        select: {
+          mentions: true,
         },
       });
 
-      // Calculate presence score (simplified for now)
-      const presenceMetrics = metrics.filter((m) => m.metricType === 'presence');
-      const presenceScore =
-        presenceMetrics.length > 0
-          ? presenceMetrics.reduce((sum, m) => sum + m.value, 0) / presenceMetrics.length
-          : 0;
+      // Process competitor data
+      const competitorStats = project.competitors.map((competitor) => {
+        const mentions = competitorMentions.filter(result =>
+          result.mentions.some(mention =>
+            mention.toLowerCase().includes(competitor.toLowerCase())
+          )
+        ).length;
 
-      // Calculate other metrics (simplified)
-      const pickRateMetrics = metrics.filter((m) => m.metricType === 'pick_rate');
-      const pickRate =
-        pickRateMetrics.length > 0
-          ? pickRateMetrics.reduce((sum, m) => sum + m.value, 0) / pickRateMetrics.length
-          : 0;
-
-      // Mock competitor data (in production, this would be calculated from actual data)
-      const competitors = project.competitors.map((name) => ({
-        name,
-        pickRate: Math.random() * 0.5,
-        mentions: Math.floor(Math.random() * 100),
-      }));
+        return {
+          name: competitor,
+          pickRate: mentions > 0 ? mentions / totalRuns : 0,
+          mentions,
+        };
+      });
 
       return {
         summary: {
-          presenceScore,
-          pickRate,
-          snippetPassRate: 0.85, // Mock value
-          citationCoverage: 0.72, // Mock value
+          presenceScore: Number(presenceScore.toFixed(3)),
+          pickRate: Number(pickRate.toFixed(3)),
+          snippetPassRate: Number(snippetPassRate.toFixed(3)),
+          citationCoverage: Number(citationCoverage.toFixed(3)),
           totalRuns,
+          totalQueries,
+          completedSessions,
         },
         timeSeries: metrics.map((m) => ({
           time: m.time.toISOString(),
           metricType: m.metricType,
           value: m.value,
         })),
-        competitors,
+        competitors: competitorStats,
       };
     }
   );
@@ -198,48 +261,272 @@ const metricsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.REPORT_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view comparative metrics',
+        });
+      }
 
       // Verify project ownership
       const project = await fastify.prisma.project.findFirst({
         where: {
           id: projectId,
-          organizationId: request.user!.organizationId,
+          organizationId,
+          isActive: true,
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
       }
 
-      // Mock comparative data (in production, this would be calculated from actual runs)
-      const tasks = [
-        {
-          task: 'Send transactional email',
-          ourScore: 0.75,
-          competitors: project.competitors.map((name) => ({
-            name,
-            score: Math.random(),
-          })),
+      // Get actual comparative data from queries and results
+      const queries = await fastify.prisma.query.findMany({
+        where: { projectId },
+        include: {
+          results: {
+            select: {
+              mentions: true,
+              citations: true,
+              responseText: true,
+            },
+          },
         },
-        {
-          task: 'Authentication setup',
-          ourScore: 0.82,
-          competitors: project.competitors.map((name) => ({
-            name,
-            score: Math.random(),
-          })),
-        },
-        {
-          task: 'API integration',
-          ourScore: 0.68,
-          competitors: project.competitors.map((name) => ({
-            name,
-            score: Math.random(),
-          })),
-        },
-      ];
+        take: 10, // Limit for performance
+      });
+
+      const tasks = await Promise.all(
+        queries.map(async (query) => {
+          // Calculate our score based on mentions in results
+          const ourMentions = query.results.filter(result =>
+            result.mentions.length > 0
+          ).length;
+          const ourScore = query.results.length > 0 ? ourMentions / query.results.length : 0;
+
+          // Calculate competitor scores
+          const competitorScores = project.competitors.map(competitor => {
+            const competitorMentions = query.results.filter(result =>
+              result.responseText.toLowerCase().includes(competitor.toLowerCase()) ||
+              result.mentions.some(mention =>
+                mention.toLowerCase().includes(competitor.toLowerCase())
+              )
+            ).length;
+
+            return {
+              name: competitor,
+              score: query.results.length > 0 ? competitorMentions / query.results.length : 0,
+            };
+          });
+
+          return {
+            task: query.text.substring(0, 50) + (query.text.length > 50 ? '...' : ''),
+            ourScore: Number(ourScore.toFixed(3)),
+            competitors: competitorScores.map(comp => ({
+              ...comp,
+              score: Number(comp.score.toFixed(3)),
+            })),
+          };
+        })
+      );
 
       return { tasks };
+    }
+  );
+
+  // Create metric (for internal use by analytics service)
+  fastify.post<{ Body: z.infer<typeof createMetricSchema> }>(
+    '/',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        body: createMetricSchema,
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              projectId: { type: 'string' },
+              metricType: { type: 'string' },
+              value: { type: 'number' },
+              time: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, role } = request.user!;
+      const { projectId, metricType, value, metadata } = request.body;
+
+      // Check permission (only admins and above can create metrics)
+      if (!hasPermission(role, Permission.PROJECT_EDIT)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to create metrics',
+        });
+      }
+
+      // Verify project ownership
+      const project = await fastify.prisma.project.findFirst({
+        where: {
+          id: projectId,
+          organizationId,
+          isActive: true,
+        },
+      });
+
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      const metric = await fastify.prisma.metric.create({
+        data: {
+          projectId,
+          metricType,
+          value,
+          time: new Date(),
+          metadata: metadata || {},
+        },
+      });
+
+      return reply.status(201).send(metric);
+    }
+  );
+
+  // Get aggregated metrics across all projects (org-level)
+  fastify.get(
+    '/organization/summary',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            startDate: { type: 'string' },
+            endDate: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              totalProjects: { type: 'number' },
+              totalQueries: { type: 'number' },
+              totalRuns: { type: 'number' },
+              avgPresenceScore: { type: 'number' },
+              avgPickRate: { type: 'number' },
+              projectBreakdown: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    projectId: { type: 'string' },
+                    projectName: { type: 'string' },
+                    presenceScore: { type: 'number' },
+                    pickRate: { type: 'number' },
+                    totalQueries: { type: 'number' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, role } = request.user!;
+      const { startDate, endDate } = request.query as any;
+
+      // Check permission
+      if (!hasPermission(role, Permission.ORG_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view organization metrics',
+        });
+      }
+
+      // Build date filter
+      const dateFilter: any = {};
+      if (startDate) {
+        dateFilter.gte = new Date(startDate);
+      }
+      if (endDate) {
+        dateFilter.lte = new Date(endDate);
+      }
+
+      // Get organization projects and their metrics
+      const projects = await fastify.prisma.project.findMany({
+        where: {
+          organizationId,
+          isActive: true,
+        },
+        include: {
+          _count: {
+            select: {
+              queries: true,
+              runSessions: true,
+            },
+          },
+          metrics: {
+            where: {
+              ...(Object.keys(dateFilter).length > 0 && { time: dateFilter }),
+            },
+          },
+        },
+      });
+
+      // Calculate aggregated metrics
+      const projectBreakdown = projects.map(project => {
+        const presenceMetrics = project.metrics.filter(m => m.metricType === 'presence');
+        const pickRateMetrics = project.metrics.filter(m => m.metricType === 'pick_rate');
+
+        const presenceScore = presenceMetrics.length > 0
+          ? presenceMetrics.reduce((sum, m) => sum + m.value, 0) / presenceMetrics.length
+          : 0;
+
+        const pickRate = pickRateMetrics.length > 0
+          ? pickRateMetrics.reduce((sum, m) => sum + m.value, 0) / pickRateMetrics.length
+          : 0;
+
+        return {
+          projectId: project.id,
+          projectName: project.name,
+          presenceScore: Number(presenceScore.toFixed(3)),
+          pickRate: Number(pickRate.toFixed(3)),
+          totalQueries: project._count.queries,
+        };
+      });
+
+      const totalProjects = projects.length;
+      const totalQueries = projects.reduce((sum, p) => sum + p._count.queries, 0);
+      const totalRuns = projects.reduce((sum, p) => sum + p._count.runSessions, 0);
+
+      const avgPresenceScore = projectBreakdown.length > 0
+        ? projectBreakdown.reduce((sum, p) => sum + p.presenceScore, 0) / projectBreakdown.length
+        : 0;
+
+      const avgPickRate = projectBreakdown.length > 0
+        ? projectBreakdown.reduce((sum, p) => sum + p.pickRate, 0) / projectBreakdown.length
+        : 0;
+
+      return {
+        totalProjects,
+        totalQueries,
+        totalRuns,
+        avgPresenceScore: Number(avgPresenceScore.toFixed(3)),
+        avgPickRate: Number(avgPickRate.toFixed(3)),
+        projectBreakdown,
+      };
     }
   );
 };

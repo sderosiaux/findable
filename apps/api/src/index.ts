@@ -10,6 +10,7 @@ import { dbPlugin } from './plugins/database';
 import { redisPlugin } from './plugins/redis';
 import { healthRoutes } from './routes/health';
 import { authRoutes } from './routes/auth';
+import { organizationRoutes } from './routes/organizations';
 import { projectRoutes } from './routes/projects';
 import { queryRoutes } from './routes/queries';
 import { metricsRoutes } from './routes/metrics';
@@ -86,9 +87,10 @@ async function main() {
     // Register routes
     await server.register(healthRoutes, { prefix: '/health' });
     await server.register(authRoutes, { prefix: '/auth' });
-    await server.register(projectRoutes, { prefix: '/projects' });
-    await server.register(queryRoutes, { prefix: '/queries' });
-    await server.register(metricsRoutes, { prefix: '/metrics' });
+    await server.register(organizationRoutes, { prefix: '/api/organization' });
+    await server.register(projectRoutes, { prefix: '/api/projects' });
+    await server.register(queryRoutes, { prefix: '/api/queries' });
+    await server.register(metricsRoutes, { prefix: '/api/metrics' });
 
     // Start server
     const port = parseInt(process.env.PORT || '3001', 10);

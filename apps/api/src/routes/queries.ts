@@ -1,12 +1,85 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { hasPermission, Permission } from '@findable/auth';
 
 const runQuerySchema = z.object({
-  projectId: z.string(),
-  queries: z.array(z.string()).min(1),
-  models: z.array(z.enum(['gpt-4', 'gpt-3.5', 'claude-3', 'perplexity'])),
-  runCount: z.number().min(1).max(10).default(1),
+  projectId: z.string().uuid(),
+  queries: z.array(z.string().min(1).max(1000)).min(1).max(10),
+  models: z.array(z.enum(['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku', 'perplexity'])),
+  surfaces: z.array(z.enum(['web', 'social', 'news', 'academic'])).optional(),
+  priority: z.enum(['low', 'normal', 'high']).default('normal'),
 });
+
+const createQuerySchema = z.object({
+  projectId: z.string().uuid(),
+  text: z.string().min(1).max(1000),
+  category: z.enum(['product', 'competitor', 'brand', 'general']).default('general'),
+  tags: z.array(z.string()).max(10).optional(),
+});
+
+// Simulate query execution (replace with actual runner service)
+async function simulateQueryExecution(
+  fastify: any,
+  sessionId: string,
+  config: {
+    queries: string[];
+    models: string[];
+    surfaces: string[];
+    projectId: string;
+  }
+) {
+  const { queries, models, surfaces, projectId } = config;
+
+  // Get available models from database
+  const availableModels = await fastify.prisma.model.findMany({
+    where: {
+      name: { in: models },
+      isActive: true,
+    },
+  });
+
+  // Create query records
+  const queryRecords = await Promise.all(
+    queries.map((queryText, index) =>
+      fastify.prisma.query.create({
+        data: {
+          projectId,
+          text: queryText,
+          category: 'general',
+        },
+      })
+    )
+  );
+
+  // Simulate execution for each query-model-surface combination
+  for (const query of queryRecords) {
+    for (const model of availableModels) {
+      for (const surface of surfaces) {
+        // Simulate processing delay
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Create mock result
+        const mockMentions = Math.random() > 0.7 ? [`mock-mention-${Math.random().toString(36).substr(2, 9)}`] : [];
+        const mockCitations = Math.random() > 0.5 ? [`https://example.com/source-${Math.random().toString(36).substr(2, 9)}`] : [];
+
+        await fastify.prisma.runResult.create({
+          data: {
+            sessionId,
+            queryId: query.id,
+            modelId: model.id,
+            queryText: query.text,
+            responseText: `Mock response for "${query.text}" from ${model.name} on ${surface}`,
+            citations: mockCitations,
+            extractedSnippets: mockMentions.length > 0 ? [`Snippet mentioning relevant content for ${query.text}`] : [],
+            mentions: mockMentions,
+            executionTimeMs: Math.floor(Math.random() * 3000) + 500,
+            surface,
+          },
+        });
+      }
+    }
+  }
+}
 
 const queryRoutes: FastifyPluginAsync = async (fastify) => {
   // Run queries
@@ -29,55 +102,76 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const { projectId, queries, models, runCount } = request.body as z.infer<
+
+      const { organizationId, role } = request.user!;
+      const { projectId, queries, models, surfaces, priority } = request.body as z.infer<
         typeof runQuerySchema
       >;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_RUN)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to run queries',
+        });
+      }
 
       // Verify project ownership
       const project = await fastify.prisma.project.findFirst({
         where: {
           id: projectId,
-          organizationId: request.user!.organizationId,
+          organizationId,
+          isActive: true,
         },
       });
 
       if (!project) {
-        return reply.code(404).send({ error: 'Project not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
       }
 
       // Create run session
       const session = await fastify.prisma.runSession.create({
         data: {
           projectId,
-          status: 'pending',
+          status: 'PENDING',
+          priority,
           metadata: {
             queries,
             models,
-            runCount,
+            surfaces: surfaces || ['web'],
+            timestamp: new Date().toISOString(),
           },
         },
       });
 
-      // Queue the job (in production, this would use a job queue like Bull/BullMQ)
+      // Queue the job (in production, this would use Redis/BullMQ)
       setImmediate(async () => {
         try {
           // Update session status
           await fastify.prisma.runSession.update({
             where: { id: session.id },
             data: {
-              status: 'running',
+              status: 'RUNNING',
               startedAt: new Date(),
             },
           });
 
-          // TODO: Implement actual query execution
-          // This would call the runner service
+          // Simulate query execution (replace with actual runner service call)
+          await simulateQueryExecution(fastify, session.id, {
+            queries,
+            models,
+            surfaces: surfaces || ['web'],
+            projectId,
+          });
 
           // Update session status
           await fastify.prisma.runSession.update({
             where: { id: session.id },
             data: {
-              status: 'completed',
+              status: 'COMPLETED',
               completedAt: new Date(),
             },
           });
@@ -86,8 +180,9 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
           await fastify.prisma.runSession.update({
             where: { id: session.id },
             data: {
-              status: 'failed',
+              status: 'FAILED',
               completedAt: new Date(),
+              errorMessage: error instanceof Error ? error.message : 'Unknown error',
             },
           });
         }
@@ -130,18 +225,44 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view query sessions',
+        });
+      }
 
       const session = await fastify.prisma.runSession.findFirst({
         where: {
           id,
           project: {
-            organizationId: request.user!.organizationId,
+            organizationId,
+          },
+        },
+        include: {
+          project: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
+          },
+          _count: {
+            select: {
+              results: true,
+            },
           },
         },
       });
 
       if (!session) {
-        return reply.code(404).send({ error: 'Session not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Session not found',
+        });
       }
 
       return session;
@@ -184,25 +305,43 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { organizationId, role } = request.user!;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view query results',
+        });
+      }
 
       // Verify session ownership
       const session = await fastify.prisma.runSession.findFirst({
         where: {
           id,
           project: {
-            organizationId: request.user!.organizationId,
+            organizationId,
           },
         },
       });
 
       if (!session) {
-        return reply.code(404).send({ error: 'Session not found' });
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Session not found',
+        });
       }
 
       const results = await fastify.prisma.runResult.findMany({
         where: { sessionId: id },
         include: {
-          model: true,
+          model: {
+            select: {
+              id: true,
+              name: true,
+              provider: true,
+            },
+          },
         },
         orderBy: {
           createdAt: 'asc',
@@ -213,14 +352,312 @@ const queryRoutes: FastifyPluginAsync = async (fastify) => {
         id: result.id,
         queryId: result.queryId,
         queryText: result.queryText,
-        modelId: result.model.name,
+        model: {
+          id: result.model.id,
+          name: result.model.name,
+          provider: result.model.provider,
+        },
         responseText: result.responseText,
         citations: result.citations,
         extractedSnippets: result.extractedSnippets,
         mentions: result.mentions,
         executionTimeMs: result.executionTimeMs,
+        surface: result.surface,
         createdAt: result.createdAt,
       }));
+    }
+  );
+
+  // Create individual query
+  fastify.post<{ Body: z.infer<typeof createQuerySchema> }>(
+    '/',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        body: createQuerySchema,
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              projectId: { type: 'string' },
+              text: { type: 'string' },
+              category: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+              createdAt: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, role } = request.user!;
+      const { projectId, text, category, tags } = request.body;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_CREATE)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to create queries',
+        });
+      }
+
+      // Verify project ownership
+      const project = await fastify.prisma.project.findFirst({
+        where: {
+          id: projectId,
+          organizationId,
+          isActive: true,
+        },
+      });
+
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      const query = await fastify.prisma.query.create({
+        data: {
+          projectId,
+          text,
+          category,
+          tags: tags || [],
+        },
+      });
+
+      return reply.status(201).send(query);
+    }
+  );
+
+  // List queries for a project
+  fastify.get<{ Querystring: { projectId: string; category?: string; limit?: number; offset?: number } }>(
+    '/',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            projectId: { type: 'string' },
+            category: { type: 'string' },
+            limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
+            offset: { type: 'number', minimum: 0, default: 0 },
+          },
+          required: ['projectId'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              queries: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    text: { type: 'string' },
+                    category: { type: 'string' },
+                    tags: { type: 'array', items: { type: 'string' } },
+                    createdAt: { type: 'string' },
+                    _count: {
+                      type: 'object',
+                      properties: {
+                        results: { type: 'number' },
+                      },
+                    },
+                  },
+                },
+              },
+              pagination: {
+                type: 'object',
+                properties: {
+                  total: { type: 'number' },
+                  limit: { type: 'number' },
+                  offset: { type: 'number' },
+                  hasMore: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, role } = request.user!;
+      const { projectId, category, limit = 20, offset = 0 } = request.query;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view queries',
+        });
+      }
+
+      // Verify project ownership
+      const project = await fastify.prisma.project.findFirst({
+        where: {
+          id: projectId,
+          organizationId,
+        },
+      });
+
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      const where = {
+        projectId,
+        ...(category && { category }),
+      };
+
+      const [queries, total] = await Promise.all([
+        fastify.prisma.query.findMany({
+          where,
+          include: {
+            _count: {
+              select: {
+                results: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+        }),
+        fastify.prisma.query.count({ where }),
+      ]);
+
+      return {
+        queries,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + limit < total,
+        },
+      };
+    }
+  );
+
+  // List sessions for a project
+  fastify.get<{ Querystring: { projectId: string; status?: string; limit?: number; offset?: number } }>(
+    '/sessions',
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            projectId: { type: 'string' },
+            status: { type: 'string' },
+            limit: { type: 'number', minimum: 1, maximum: 50, default: 10 },
+            offset: { type: 'number', minimum: 0, default: 0 },
+          },
+          required: ['projectId'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              sessions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    status: { type: 'string' },
+                    priority: { type: 'string' },
+                    startedAt: { type: 'string', nullable: true },
+                    completedAt: { type: 'string', nullable: true },
+                    createdAt: { type: 'string' },
+                    metadata: { type: 'object' },
+                    _count: {
+                      type: 'object',
+                      properties: {
+                        results: { type: 'number' },
+                      },
+                    },
+                  },
+                },
+              },
+              pagination: {
+                type: 'object',
+                properties: {
+                  total: { type: 'number' },
+                  limit: { type: 'number' },
+                  offset: { type: 'number' },
+                  hasMore: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, role } = request.user!;
+      const { projectId, status, limit = 10, offset = 0 } = request.query;
+
+      // Check permission
+      if (!hasPermission(role, Permission.QUERY_VIEW)) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'You do not have permission to view query sessions',
+        });
+      }
+
+      // Verify project ownership
+      const project = await fastify.prisma.project.findFirst({
+        where: {
+          id: projectId,
+          organizationId,
+        },
+      });
+
+      if (!project) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Project not found',
+        });
+      }
+
+      const where = {
+        projectId,
+        ...(status && { status: status.toUpperCase() }),
+      };
+
+      const [sessions, total] = await Promise.all([
+        fastify.prisma.runSession.findMany({
+          where,
+          include: {
+            _count: {
+              select: {
+                results: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          skip: offset,
+        }),
+        fastify.prisma.runSession.count({ where }),
+      ]);
+
+      return {
+        sessions,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + limit < total,
+        },
+      };
     }
   );
 };

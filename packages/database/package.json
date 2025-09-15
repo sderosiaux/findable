@@ -9,14 +9,19 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
-    "db:seed": "tsx src/seed.ts",
+    "db:seed": "tsx src/seeders/index.ts",
+    "db:seed:models": "tsx src/seeders/models.ts",
+    "db:seed:demo": "tsx src/seeders/demo-data.ts",
     "db:studio": "prisma studio",
-    "clean": "rm -rf node_modules .turbo"
+    "clean": "rm -rf node_modules .turbo",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@prisma/client": "^5.8.1"
+    "@prisma/client": "^5.8.1",
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "prisma": "^5.8.1",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
